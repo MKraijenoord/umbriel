@@ -54,6 +54,7 @@ namespace umbriel {
     [[nodiscard]] wlr_output* wlr() const { return m_output; }
     [[nodiscard]] OutputIdentity identity() const;
     [[nodiscard]] wlr_scene_output* sceneOutput() const { return m_sceneOutput; }
+    void commitPendingInitialState();
     // Create an opaque scene mask matching a pending configured state. The
     // caller owns the returned node and must keep it through the commit.
     [[nodiscard]] wlr_scene_rect* createConfiguredFrameMask(const wlr_output_state& state) const;
@@ -247,6 +248,7 @@ namespace umbriel {
 #endif
     bool m_desktopEnabled = true;
     bool m_dpmsOff = false;
+    bool m_initialCommitPending = false;
     bool m_modeFallbackWarned = false;
     std::optional<FormatTier> m_vrrDroppedTier;
     bool m_fullscreenHdrRequested = false;

@@ -145,6 +145,7 @@ namespace umbriel {
   class Overview;
   class Seat;
   class SessionLock;
+  class SessionHandover;
   class View;
   class Workspace;
   class WorkspaceGroup;
@@ -871,6 +872,7 @@ namespace umbriel {
     std::unique_ptr<Cursor> m_cursor;
     std::unique_ptr<Gestures> m_gestures;
     std::unique_ptr<SessionLock> m_sessionLock;
+    std::unique_ptr<SessionHandover> m_sessionHandover;
     std::unique_ptr<Overview> m_overview;
     std::unique_ptr<ScratchpadManager> m_scratchpadManager;
     std::unique_ptr<HintRect> m_insertHint;

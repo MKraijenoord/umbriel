@@ -45,6 +45,7 @@ extern "C" {
 
 #ifdef TRACY_ENABLE
 #include <set>
+#include <utility>
 #endif
 
 namespace umbriel {
@@ -184,7 +185,11 @@ namespace umbriel {
 
     applyCursorConfig();
     m_desktopEnabled = m_server->initialOutputEnabled(*this);
-    if (!applyConfiguredState()) {
+    if (m_server->session() != nullptr && !m_server->session()->active) {
+      // The DRM backend refuses commits until the session is active; keep the live state and commit on activation.
+      m_initialCommitPending = true;
+      kLog.info("output '{}': session inactive, deferring the initial commit", m_output->name);
+    } else if (!applyConfiguredState()) {
       // Do not advertise a logical output whose initial backend enable failed.
       // Keeping it disabled lets a later output-enable action retry the commit.
       m_desktopEnabled = false;
@@ -220,6 +225,15 @@ namespace umbriel {
     m_pinnedRoot = wlr_scene_tree_create(m_server->pinnedTree());
     arrangeLayers();
     m_workspaceGroup = std::make_unique<WorkspaceGroup>(*m_server, *this);
+  }
+
+  void Output::commitPendingInitialState() {
+    if (!std::exchange(m_initialCommitPending, false)) {
+      return;
+    }
+    if (!applyConfiguredState()) {
+      kLog.error("output '{}': initial commit after session activation failed", m_output->name);
+    }
   }
 
   bool Output::configuredEnabled() const {

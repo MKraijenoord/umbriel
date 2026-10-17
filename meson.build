@@ -765,6 +765,7 @@ core_sources = files(
   'src/server/backend_manager.cpp',
   'src/server/allocator.cpp',
   'src/server/server.cpp',
+  'src/server/session_handover.cpp',
   'src/server/server_events.cpp',
   'src/server/server_keybinds.cpp',
   'src/server/server_outputs.cpp',
