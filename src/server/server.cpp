@@ -32,6 +32,7 @@
 #include "server/color_manager.h"
 #include "server/drm_lease.h"
 #include "server/ipc.h"
+#include "server/session_handover.h"
 #include "server/syncobj_acquire_barrier.h"
 #include "server/syncobj_superseded_release.h"
 #include "server/syncobj_unmap_release.h"
@@ -1171,6 +1172,10 @@ namespace umbriel {
       return false;
     }
     m_backendManager->markStarted();
+    if (const char* handoverSocket = std::getenv("GREETD_HANDOVER_SOCKET"); handoverSocket != nullptr && !m_nested) {
+      m_sessionHandover = std::make_unique<SessionHandover>(*this, handoverSocket);
+    }
+    ::unsetenv("GREETD_HANDOVER_SOCKET");
 
     // Move the mouse cursor to the first output with "focus_at_startup" enabled, if any.
     for (const auto& output : m_outputs) {
@@ -1340,8 +1345,14 @@ namespace umbriel {
     if (startupCmd != nullptr) {
       spawn(startupCmd);
     }
+    if (m_sessionHandover != nullptr) {
+      m_sessionHandover->beginShellSpawn();
+    }
     for (const std::string& command : config().general.autostart) {
       spawn(command.c_str());
+    }
+    if (m_sessionHandover != nullptr) {
+      m_sessionHandover->endShellSpawn();
     }
     return true;
   }
@@ -1403,6 +1414,9 @@ namespace umbriel {
 
   void Server::requestSessionExit() {
     if (m_stopping || m_sessionExitRequested) {
+      return;
+    }
+    if (m_sessionHandover != nullptr && m_sessionHandover->requestLogout()) {
       return;
     }
     if (!m_sessionShutdownAvailable) {

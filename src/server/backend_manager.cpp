@@ -4,6 +4,7 @@
 #include "server/drm_policy.h"
 #include "wlr.h"
 
+#include <array>
 #include <cstdlib>
 #include <memory>
 #include <optional>
@@ -211,8 +212,14 @@ namespace umbriel {
       m_destroying = true;
       disconnectSessionListeners();
 #endif
+      if (m_handoverActive.link.next != nullptr) {
+        wl_list_remove(&m_handoverActive.link);
+      }
       if (m_backend != nullptr) {
         wlr_backend_destroy(m_backend);
+      }
+      if (m_ownsSession && m_session != nullptr) {
+        wlr_session_destroy(m_session);
       }
 #if UMBRIEL_HAS_NATIVE_DRM_POLICY
       if (m_policyActive && m_session != nullptr) {
@@ -241,6 +248,9 @@ namespace umbriel {
         kLog.info("configuration is inactive because the selected backend is nested or headless");
       }
 
+      if (!m_policyActive && environment.native && std::getenv("GREETD_HANDOVER_SOCKET") != nullptr) {
+        return initializeForHandover();
+      }
       if (!m_policyActive) {
         m_backend = wlr_backend_autocreate(wl_display_get_event_loop(m_display), &m_session);
         return m_backend != nullptr;
@@ -262,6 +272,80 @@ namespace umbriel {
     }
 
     // A headless child backend with no outputs lets output-create add virtual outputs to native and nested sessions.
+    // Opens the seat and its devices without waiting for the session to become active, so a display manager can keep
+    // its greeter on screen while this session prepares its first frame on another VT.
+    [[nodiscard]] bool initializeForHandover() {
+      wl_event_loop* loop = wl_display_get_event_loop(m_display);
+      m_session = wlr_session_create(loop);
+      if (m_session == nullptr) {
+        kLog.error("failed to create a native session");
+        return false;
+      }
+      m_ownsSession = true;
+      kLog.info("session handover: creating backends with the session {}", m_session->active ? "active" : "inactive");
+
+      m_backend = wlr_multi_backend_create(loop);
+      if (m_backend == nullptr) {
+        return false;
+      }
+      std::array<wlr_device*, 8> gpus{};
+      const ssize_t gpuCount = wlr_session_find_gpus(m_session, gpus.size(), gpus.data());
+      if (gpuCount <= 0) {
+        kLog.error("session handover: no GPUs found");
+        return false;
+      }
+      wlr_backend* primary = nullptr;
+      for (ssize_t i = 0; i < gpuCount; ++i) {
+        wlr_backend* drm = wlr_drm_backend_create(m_session, gpus.at(static_cast<size_t>(i)), primary);
+        if (drm == nullptr) {
+          continue;
+        }
+        primary = primary != nullptr ? primary : drm;
+        wlr_multi_backend_add(m_backend, drm);
+      }
+      if (primary == nullptr) {
+        kLog.error("session handover: no DRM backend could be created");
+        return false;
+      }
+      if (m_session->active) {
+        addLibinputBackend(false);
+      } else {
+        // Input devices are opened only once the session is active, in the same order as a regular login.
+        m_handoverActive.notify = onHandoverSessionActive;
+        wl_signal_add(&m_session->events.active, &m_handoverActive);
+      }
+      return true;
+    }
+
+    void addLibinputBackend(bool start) {
+      wlr_backend* input = wlr_libinput_backend_create(m_session);
+      if (input == nullptr) {
+        kLog.error("session handover: failed to create the libinput backend");
+        return;
+      }
+      wlr_multi_backend_add(m_backend, input);
+      if (start && !wlr_backend_start(input)) {
+        kLog.error("session handover: failed to start the libinput backend");
+      }
+    }
+
+    static void onHandoverSessionActive(wl_listener* listener, void* /*data*/) {
+      Impl* self = wl_container_of(listener, self, m_handoverActive);
+      if (!self->m_session->active) {
+        return;
+      }
+      wl_list_remove(&self->m_handoverActive.link);
+      self->m_handoverActive.link.next = nullptr;
+      // Added from an idle callback so the outputs commit their first frame before libinput enumerates devices.
+      wl_event_loop_add_idle(wl_display_get_event_loop(self->m_display), onAddDeferredInput, self);
+    }
+
+    static void onAddDeferredInput(void* data) {
+      auto* self = static_cast<Impl*>(data);
+      kLog.info("session handover: adding input devices");
+      self->addLibinputBackend(true);
+    }
+
     void addHeadlessBackend() {
       if (!wlr_backend_is_multi(m_backend)) {
         return;
@@ -329,6 +413,8 @@ namespace umbriel {
     bool m_policyActive = false;
     wlr_backend* m_backend = nullptr;
     wlr_session* m_session = nullptr;
+    bool m_ownsSession = false;
+    wl_listener m_handoverActive{};
 
 #if UMBRIEL_HAS_NATIVE_DRM_POLICY
     struct DrmBackendRecord {
