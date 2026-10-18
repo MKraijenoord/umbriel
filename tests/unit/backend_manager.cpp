@@ -11,6 +11,7 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -62,6 +63,9 @@ namespace {
     std::string auditPath;
     dev_t auditDevice = 0;
     int auditError = 0;
+    bool sessionActive = true;
+    int libinputCreated = 0;
+    int libinputStarted = 0;
 
     udev_device& addGpu(unsigned int card, const std::string& pci) {
       auto& parent = inventory.emplace_back();
@@ -146,6 +150,33 @@ namespace {
       .commit = nullptr,
   };
 
+  bool startLibinput(wlr_backend*) {
+    ++devices->libinputStarted;
+    return true;
+  }
+
+  void destroyLibinput(wlr_backend* backend) {
+    wlr_backend_finish(backend);
+    delete backend;
+  }
+
+  const wlr_backend_impl kLibinputImpl{
+      .start = startLibinput,
+      .destroy = destroyLibinput,
+      .get_drm_fd = nullptr,
+      .test = nullptr,
+      .commit = nullptr,
+  };
+
+  class HandoverSocket {
+  public:
+    HandoverSocket() { setenv("GREETD_HANDOVER_SOCKET", "/run/greetd-handover.sock", 1); }
+    ~HandoverSocket() { unsetenv("GREETD_HANDOVER_SOCKET"); }
+
+    HandoverSocket(const HandoverSocket&) = delete;
+    HandoverSocket& operator=(const HandoverSocket&) = delete;
+  };
+
   class Fixture {
   public:
     Fixture() {
@@ -192,6 +223,17 @@ namespace {
         }
       }
     }
+
+    void activateSession() {
+      wlr_session* session = manager != nullptr ? manager->session() : nullptr;
+      CHECK(session != nullptr);
+      if (session != nullptr) {
+        session->active = true;
+        wl_signal_emit_mutable(&session->events.active, nullptr);
+      }
+    }
+
+    void dispatchIdle() { wl_event_loop_dispatch_idle(wl_display_get_event_loop(display)); }
 
     bool verifyOpenDevice(dev_t device) {
       std::FILE* file = std::tmpfile();
@@ -298,7 +340,7 @@ const char* udev_device_get_sysattr_value(udev_device*, const char*) { return nu
 
 wlr_session* wlr_session_create(wl_event_loop* loop) {
   auto* session = new wlr_session{};
-  session->active = true;
+  session->active = devices->sessionActive;
   std::strcpy(session->seat, "seat0");
   session->udev = &devices->context;
   session->event_loop = loop;
@@ -347,6 +389,22 @@ wlr_backend* wlr_drm_backend_create(wlr_session* session, wlr_device* device, wl
   drm->remove.notify = removeDrm;
   wl_signal_add(&device->events.remove, &drm->remove);
   return &drm->base;
+}
+ssize_t wlr_session_find_gpus(wlr_session* session, size_t retLen, wlr_device** ret) {
+  const std::span<wlr_device*> found(ret, retLen);
+  size_t count = 0;
+  for (const auto& device : devices->inventory) {
+    if (count < found.size() && device.present && device.subsystem == "drm" && device.sysname.starts_with("card")) {
+      found[count++] = wlr_session_open_file(session, device.node.c_str());
+    }
+  }
+  return static_cast<ssize_t>(count);
+}
+wlr_backend* wlr_libinput_backend_create(wlr_session*) {
+  ++devices->libinputCreated;
+  auto* backend = new wlr_backend{};
+  wlr_backend_init(backend, &kLibinputImpl);
+  return backend;
 }
 wlr_backend* wlr_backend_autocreate(wl_event_loop* loop, wlr_session** session) {
   ++devices->automaticCalls;
@@ -479,6 +537,47 @@ UMBRIEL_TEST(descriptorAuditRejectsUnreadableDescriptorsButAllowsClosedOnes) {
   CHECK(!fixture.verifyOpenDevice(ignored.device));
   fixture.inventory.auditError = ENOENT;
   CHECK(fixture.verifyOpenDevice(ignored.device));
+}
+
+UMBRIEL_TEST(handoverOpensGpusWithoutWaitingForAnInactiveSession) {
+  HandoverSocket handover;
+  Fixture fixture;
+  fixture.inventory.sessionActive = false;
+  fixture.inventory.addGpu(0, "0000:00:02.0");
+
+  fixture.start({});
+
+  CHECK_EQ(fixture.inventory.automaticCalls, 0);
+  CHECK_EQ(fixture.inventory.openedPci, (std::vector<std::string>{"0000:00:02.0"}));
+  CHECK_EQ(fixture.inventory.startedPci, (std::vector<std::string>{"0000:00:02.0"}));
+  CHECK_EQ(fixture.inventory.libinputCreated, 0);
+}
+
+UMBRIEL_TEST(handoverAddsInputAfterTheActivatedSessionGotAChanceToCommit) {
+  HandoverSocket handover;
+  Fixture fixture;
+  fixture.inventory.sessionActive = false;
+  fixture.inventory.addGpu(0, "0000:00:02.0");
+  fixture.start({});
+
+  fixture.activateSession();
+  CHECK_EQ(fixture.inventory.libinputCreated, 0);
+  fixture.dispatchIdle();
+
+  CHECK_EQ(fixture.inventory.libinputCreated, 1);
+  CHECK_EQ(fixture.inventory.libinputStarted, 1);
+}
+
+UMBRIEL_TEST(handoverOnAnActiveSessionAddsInputWithTheGpus) {
+  HandoverSocket handover;
+  Fixture fixture;
+  fixture.inventory.addGpu(0, "0000:00:02.0");
+
+  fixture.start({});
+
+  CHECK_EQ(fixture.inventory.openedPci, (std::vector<std::string>{"0000:00:02.0"}));
+  CHECK_EQ(fixture.inventory.libinputCreated, 1);
+  CHECK_EQ(fixture.inventory.libinputStarted, 1);
 }
 
 int main() { return RUN_TESTS(); }

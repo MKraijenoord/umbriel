@@ -72,6 +72,7 @@ unit_tests = [
   ['allocator-policy', ['unit/allocator_policy.cpp'], []],
   ['drm-policy', ['unit/drm_policy.cpp'], []],
   ['config-watcher', ['unit/config_watcher.cpp'], [umbriel_core_dep]],
+  ['session-handover', ['unit/session_handover.cpp'], [umbriel_core_dep]],
   ['action-registry', ['unit/action_registry.cpp'], [umbriel_core_dep]],
   ['ipc-commands', ['unit/ipc_commands.cpp'], [umbriel_core_dep]],
   ['config-resolve', ['unit/config_resolve.cpp'], []],
