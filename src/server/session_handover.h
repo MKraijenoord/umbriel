@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -10,16 +12,30 @@ extern "C" {
 #include <wayland-server-core.h>
 }
 
+struct wlr_session;
+
 namespace umbriel {
 
-  class Server;
+  class Output;
+
+  struct SessionHandoverHost {
+    wl_event_loop* loop = nullptr;
+    wlr_session* session = nullptr;
+    std::function<std::span<const std::unique_ptr<Output>>()> outputs;
+    std::function<void()> requestSessionExit;
+  };
+
+  struct SessionHandoverTimeouts {
+    int presentedFallbackMs = 1000;
+    int logoutMs = 20000;
+  };
 
   // Hands the display over from a display manager that keeps its greeter on screen while this session starts on
   // another VT. The shell's READY=1 (sd_notify) is relayed to the display manager, which switches VTs; once the
   // outputs have committed their first frame, PRESENTED=1 tells it the greeter can go.
   class SessionHandover {
   public:
-    SessionHandover(Server& server, std::string socketPath);
+    SessionHandover(SessionHandoverHost host, std::string socketPath, SessionHandoverTimeouts timeouts = {});
     ~SessionHandover();
 
     SessionHandover(const SessionHandover&) = delete;
@@ -52,8 +68,9 @@ namespace umbriel {
     void sendPresented();
     void clearPresentWatches();
 
-    Server& m_server;
+    SessionHandoverHost m_host;
     std::string m_socketPath;
+    SessionHandoverTimeouts m_timeouts;
     std::string m_notifyPath;
     int m_notifyFd = -1;
     wl_event_source* m_notifySource = nullptr;
