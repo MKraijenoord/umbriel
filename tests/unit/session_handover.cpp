@@ -331,6 +331,25 @@ UMBRIEL_TEST(greetdQuitWithoutAPendingLogoutIsIgnored) {
   CHECK(fixture.handover->requestLogout());
 }
 
+UMBRIEL_TEST(logoutIsNotDeferredWhenTheReadinessSocketCouldNotBeCreated) {
+  Fixture fixture;
+  FakeSession session(true);
+  const ScopedEnvironment missingRuntimeDir("XDG_RUNTIME_DIR", (fixture.dir / "missing").string());
+  fixture.start(session.get());
+
+  CHECK(!fixture.handover->requestLogout());
+  CHECK_EQ(fixture.greetd.receive(), std::string());
+}
+
+UMBRIEL_TEST(shellGetsNoReadinessSocketWhenItCouldNotBeCreated) {
+  Fixture fixture;
+  FakeSession session(true);
+  const ScopedEnvironment missingRuntimeDir("XDG_RUNTIME_DIR", (fixture.dir / "missing").string());
+  fixture.start(session.get());
+
+  CHECK_EQ(fixture.notifySocket(), std::string());
+}
+
 UMBRIEL_TEST(logoutGivesGreetdTwentySecondsByDefault) { CHECK_EQ(SessionHandoverTimeouts{}.logoutMs, 20000); }
 
 UMBRIEL_TEST(logoutWaitsForGreetdWithinTheTimeout) {
