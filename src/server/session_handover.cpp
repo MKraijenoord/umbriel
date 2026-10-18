@@ -2,7 +2,6 @@
 
 #include "core/log.h"
 #include "output/output.h"
-#include "server/server.h"
 #include "wlr.h"
 
 #include <array>
@@ -23,8 +22,6 @@ namespace umbriel {
   namespace {
     constexpr Logger kLog("handover");
     constexpr int kInactiveFrameIntervalMs = 16;
-    constexpr int kPresentedFallbackMs = 1000;
-    constexpr int kLogoutTimeoutMs = 20000;
 
     [[nodiscard]] bool fillAddress(sockaddr_un& addr, std::string_view path) {
       addr.sun_family = AF_UNIX;
@@ -36,9 +33,9 @@ namespace umbriel {
     }
   } // namespace
 
-  SessionHandover::SessionHandover(Server& server, std::string socketPath)
-      : m_server(server), m_socketPath(std::move(socketPath)) {
-    wl_event_loop* loop = wl_display_get_event_loop(m_server.display());
+  SessionHandover::SessionHandover(SessionHandoverHost host, std::string socketPath, SessionHandoverTimeouts timeouts)
+      : m_host(std::move(host)), m_socketPath(std::move(socketPath)), m_timeouts(timeouts) {
+    wl_event_loop* loop = m_host.loop;
     const char* runtimeDir = std::getenv("XDG_RUNTIME_DIR");
     m_notifyPath = std::format("{}/umbriel-ready-{}.sock", runtimeDir != nullptr ? runtimeDir : "/tmp", getpid());
     ::unlink(m_notifyPath.c_str());
@@ -52,7 +49,7 @@ namespace umbriel {
       m_notifySource = wl_event_loop_add_fd(loop, m_notifyFd, WL_EVENT_READABLE, onNotifyReadable, this);
     }
 
-    wlr_session* session = m_server.session();
+    wlr_session* session = m_host.session;
     if (session != nullptr && !session->active) {
       m_frameTimer = wl_event_loop_add_timer(loop, onFrameTimer, this);
       wl_event_source_timer_update(m_frameTimer, kInactiveFrameIntervalMs);
@@ -102,8 +99,8 @@ namespace umbriel {
     m_logoutPending = true;
     kLog.info("asking the display manager for a seamless logout");
     send(std::format("LOGOUT=1\nREPLY={}", m_notifyPath));
-    m_logoutTimer = wl_event_loop_add_timer(wl_display_get_event_loop(m_server.display()), onLogoutTimeout, this);
-    wl_event_source_timer_update(m_logoutTimer, kLogoutTimeoutMs);
+    m_logoutTimer = wl_event_loop_add_timer(m_host.loop, onLogoutTimeout, this);
+    wl_event_source_timer_update(m_logoutTimer, m_timeouts.logoutMs);
     return true;
   }
 
@@ -111,7 +108,7 @@ namespace umbriel {
     auto* self = static_cast<SessionHandover*>(data);
     kLog.warn("display manager did not take over in time; quitting");
     self->m_logoutReleased = true;
-    self->m_server.requestSessionExit();
+    self->m_host.requestSessionExit();
     return 0;
   }
 
@@ -126,14 +123,14 @@ namespace umbriel {
     if (self->m_logoutPending && message.find("QUIT=1") != std::string_view::npos) {
       kLog.info("greeter is on screen; quitting");
       self->m_logoutReleased = true;
-      self->m_server.requestSessionExit();
+      self->m_host.requestSessionExit();
       return 0;
     }
     if (!self->m_readySent && message.find("READY=1") != std::string_view::npos) {
       self->m_readySent = true;
       kLog.info("shell is ready; asking the display manager to switch");
       self->send("READY=1");
-      wlr_session* session = self->m_server.session();
+      wlr_session* session = self->m_host.session;
       if (session != nullptr && session->active && self->m_presentedTimer == nullptr) {
         // Not a handover after all (the session was already active): there is no greeter frame to replace.
         self->send("PRESENTED=1");
@@ -152,7 +149,7 @@ namespace umbriel {
   void SessionHandover::sendFrameDone() {
     timespec now{};
     clock_gettime(CLOCK_MONOTONIC, &now);
-    for (const auto& output : m_server.outputs()) {
+    for (const auto& output : m_host.outputs()) {
       if (output->sceneOutput() != nullptr) {
         wlr_scene_output_send_frame_done(output->sceneOutput(), &now);
       }
@@ -161,7 +158,7 @@ namespace umbriel {
 
   void SessionHandover::onSessionActive(wl_listener* listener, void* /*data*/) {
     SessionHandover* self = wl_container_of(listener, self, m_sessionActive);
-    wlr_session* session = self->m_server.session();
+    wlr_session* session = self->m_host.session;
     if (session == nullptr || !session->active) {
       return;
     }
@@ -173,7 +170,7 @@ namespace umbriel {
     }
 
     kLog.info("session active; committing outputs");
-    for (const auto& output : self->m_server.outputs()) {
+    for (const auto& output : self->m_host.outputs()) {
       wlr_output* wlrOutput = output->sceneOutput() != nullptr ? output->sceneOutput()->output : nullptr;
       if (wlrOutput == nullptr || !wlrOutput->enabled) {
         continue;
@@ -184,12 +181,11 @@ namespace umbriel {
       wl_signal_add(&wlrOutput->events.present, &watch->present);
       self->m_presentWatches.push_back(std::move(watch));
     }
-    for (const auto& output : self->m_server.outputs()) {
+    for (const auto& output : self->m_host.outputs()) {
       output->commitPendingInitialState();
     }
-    wl_event_loop* loop = wl_display_get_event_loop(self->m_server.display());
-    self->m_presentedTimer = wl_event_loop_add_timer(loop, onPresentedTimer, self);
-    wl_event_source_timer_update(self->m_presentedTimer, kPresentedFallbackMs);
+    self->m_presentedTimer = wl_event_loop_add_timer(self->m_host.loop, onPresentedTimer, self);
+    wl_event_source_timer_update(self->m_presentedTimer, self->m_timeouts.presentedFallbackMs);
   }
 
   void SessionHandover::onOutputPresent(wl_listener* listener, void* data) {

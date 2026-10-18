@@ -981,7 +981,15 @@ namespace umbriel {
     }
     m_backendManager->markStarted();
     if (const char* handoverSocket = std::getenv("GREETD_HANDOVER_SOCKET"); handoverSocket != nullptr && !m_nested) {
-      m_sessionHandover = std::make_unique<SessionHandover>(*this, handoverSocket);
+      m_sessionHandover = std::make_unique<SessionHandover>(
+          SessionHandoverHost{
+              .loop = wl_display_get_event_loop(m_display),
+              .session = m_session,
+              .outputs = [this] { return outputs(); },
+              .requestSessionExit = [this] { requestSessionExit(); },
+          },
+          handoverSocket
+      );
     }
     ::unsetenv("GREETD_HANDOVER_SOCKET");
 
