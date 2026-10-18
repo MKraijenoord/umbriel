@@ -124,13 +124,13 @@ namespace umbriel {
       return 0;
     }
     const std::string_view message(buffer.data(), static_cast<size_t>(len));
-    if (self->m_logoutPending && message.find("QUIT=1") != std::string_view::npos) {
+    if (self->m_logoutPending && message.contains("QUIT=1")) {
       kLog.info("greeter is on screen; quitting");
       self->m_logoutReleased = true;
       self->m_host.requestSessionExit();
       return 0;
     }
-    if (!self->m_readySent && message.find("READY=1") != std::string_view::npos) {
+    if (!self->m_readySent && message.contains("READY=1")) {
       self->m_readySent = true;
       kLog.info("shell is ready; asking the display manager to switch");
       self->send("READY=1");
@@ -161,7 +161,8 @@ namespace umbriel {
   }
 
   void SessionHandover::onSessionActive(wl_listener* listener, void* /*data*/) {
-    SessionHandover* self = wl_container_of(listener, self, m_sessionActive);
+    SessionHandover* self;
+    self = wl_container_of(listener, self, m_sessionActive);
     wlr_session* session = self->m_host.session;
     if (session == nullptr || !session->active) {
       return;
@@ -193,7 +194,8 @@ namespace umbriel {
   }
 
   void SessionHandover::onOutputPresent(wl_listener* listener, void* data) {
-    PresentWatch* watch = wl_container_of(listener, watch, present);
+    PresentWatch* watch;
+    watch = wl_container_of(listener, watch, present);
     const auto* event = static_cast<const wlr_output_event_present*>(data);
     if (event == nullptr || !event->presented) {
       return;

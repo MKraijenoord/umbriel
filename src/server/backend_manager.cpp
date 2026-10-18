@@ -271,7 +271,6 @@ namespace umbriel {
 #endif
     }
 
-    // A headless child backend with no outputs lets output-create add virtual outputs to native and nested sessions.
     // Opens the seat and its devices without waiting for the session to become active, so a display manager can keep
     // its greeter on screen while this session prepares its first frame on another VT.
     [[nodiscard]] bool initializeForHandover() {
@@ -346,6 +345,7 @@ namespace umbriel {
       self->addLibinputBackend(true);
     }
 
+    // A headless child backend with no outputs lets output-create add virtual outputs to native and nested sessions.
     void addHeadlessBackend() {
       if (!wlr_backend_is_multi(m_backend)) {
         return;
