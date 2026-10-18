@@ -45,6 +45,10 @@ namespace umbriel {
         || !fillAddress(addr, m_notifyPath)
         || ::bind(m_notifyFd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
       kLog.error("failed to create the readiness socket {}: {}", m_notifyPath, std::strerror(errno));
+      if (m_notifyFd >= 0) {
+        ::close(m_notifyFd);
+        m_notifyFd = -1;
+      }
     } else {
       m_notifySource = wl_event_loop_add_fd(loop, m_notifyFd, WL_EVENT_READABLE, onNotifyReadable, this);
     }
