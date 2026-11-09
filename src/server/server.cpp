@@ -1178,6 +1178,7 @@ namespace umbriel {
               .loop = wl_display_get_event_loop(m_display),
               .session = m_session,
               .outputs = [this] { return outputs(); },
+              .shellDrawn = [this] { return shellDrawnOnEveryOutput(); },
               .requestSessionExit = [this] { requestSessionExit(); },
           },
           handoverSocket
@@ -1353,16 +1354,35 @@ namespace umbriel {
     if (startupCmd != nullptr) {
       spawn(startupCmd);
     }
-    if (m_sessionHandover != nullptr) {
-      m_sessionHandover->beginShellSpawn();
-    }
     for (const std::string& command : config().general.autostart) {
       spawn(command.c_str());
     }
-    if (m_sessionHandover != nullptr) {
-      m_sessionHandover->endShellSpawn();
-    }
     return true;
+  }
+
+  void Server::notifyLayerSurfaceMapped() {
+    if (m_sessionHandover != nullptr) {
+      m_sessionHandover->layerSurfaceMapped();
+    }
+  }
+
+  bool Server::shellDrawnOnEveryOutput() const {
+    bool anyOutput = false;
+    for (const auto& output : m_outputs) {
+      if (!output->desktopEnabled()) {
+        continue;
+      }
+      anyOutput = true;
+      const bool hasBackground = std::ranges::any_of(m_layerSurfaces, [&](const auto& layer) {
+        return layer->mapped()
+            && layer->output() == output.get()
+            && layer->layerSurface()->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+      });
+      if (!hasBackground) {
+        return false;
+      }
+    }
+    return anyOutput;
   }
 
   void Server::showConfigDiagnostics() {

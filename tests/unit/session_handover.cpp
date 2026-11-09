@@ -147,26 +147,21 @@ namespace {
               .loop = loop,
               .session = session,
               .outputs = [] { return std::span<const std::unique_ptr<Output>>{}; },
+              .shellDrawn = [this] { return shellDrawn; },
               .requestSessionExit = [this] { ++exitRequests; },
           },
           greetd.path(), timeouts
       );
     }
 
-    std::string notifySocket() const {
-      handover->beginShellSpawn();
-      const char* value = std::getenv("NOTIFY_SOCKET");
-      std::string path = value != nullptr ? value : "";
-      handover->endShellSpawn();
-      return path;
-    }
+    std::string replySocket() const { return std::format("{}/umbriel-ready-{}.sock", dir.string(), getpid()); }
 
-    std::string expectedNotifySocket() const {
-      return std::format("{}/umbriel-ready-{}.sock", dir.string(), getpid());
-    }
+    void greetdReplies(std::string_view message) const { sendDatagram(replySocket(), message); }
 
-    void shellNotifies(std::string_view message) const { sendDatagram(notifySocket(), message); }
-    void greetdReplies(std::string_view message) const { sendDatagram(notifySocket(), message); }
+    void shellDraws() {
+      shellDrawn = true;
+      handover->layerSurfaceMapped();
+    }
 
     void dispatchFor(int milliseconds) const {
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
@@ -189,79 +184,84 @@ namespace {
     FakeGreetd greetd{(dir / "greetd.sock").string()};
     wl_event_loop* loop = wl_event_loop_create();
     std::unique_ptr<SessionHandover> handover;
+    bool shellDrawn = false;
     int exitRequests = 0;
   };
 } // namespace
 
-UMBRIEL_TEST(shellSeesTheReadinessSocketOnlyWhileItIsSpawned) {
+UMBRIEL_TEST(drawnShellOnActiveSessionAsksForTheSwitchOnceTheShellSettles) {
   Fixture fixture;
   FakeSession session(true);
-  fixture.start(session.get());
+  fixture.start(session.get(), {.shellSettleMs = 20});
 
-  fixture.handover->beginShellSpawn();
-  const char* during = std::getenv("NOTIFY_SOCKET");
-  CHECK_EQ(std::string(during != nullptr ? during : ""), fixture.expectedNotifySocket());
-  fixture.handover->endShellSpawn();
-
-  CHECK(std::getenv("NOTIFY_SOCKET") == nullptr);
-}
-
-UMBRIEL_TEST(readyShellOnActiveSessionIsRelayedAndPresentedAtOnce) {
-  Fixture fixture;
-  FakeSession session(true);
-  fixture.start(session.get());
-
-  fixture.shellNotifies("READY=1");
-  fixture.dispatchFor(50);
+  fixture.shellDraws();
+  CHECK_EQ(fixture.greetd.receive(), std::string());
+  fixture.dispatchFor(60);
 
   CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
   CHECK_EQ(fixture.greetd.receive(), std::string("PRESENTED=1"));
   CHECK_EQ(fixture.greetd.receive(), std::string());
 }
 
-UMBRIEL_TEST(readinessAmongOtherNotifyFieldsIsRelayed) {
+UMBRIEL_TEST(layerSurfacesMappedBeforeTheShellIsDrawnDoNotAskForTheSwitch) {
   Fixture fixture;
   FakeSession session(true);
-  fixture.start(session.get());
+  fixture.start(session.get(), {.shellSettleMs = 20});
 
-  fixture.shellNotifies("STATUS=started\nREADY=1\nMAINPID=42");
-  fixture.dispatchFor(50);
-
-  CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
-}
-
-UMBRIEL_TEST(notifyWithoutReadinessIsNotRelayed) {
-  Fixture fixture;
-  FakeSession session(true);
-  fixture.start(session.get());
-
-  fixture.shellNotifies("STATUS=loading");
-  fixture.dispatchFor(50);
+  fixture.handover->layerSurfaceMapped();
+  fixture.dispatchFor(60);
 
   CHECK_EQ(fixture.greetd.receive(), std::string());
 }
 
-UMBRIEL_TEST(repeatedReadinessIsRelayedOnce) {
+UMBRIEL_TEST(layerSurfaceMappedWhileTheShellSettlesWaitsForItToo) {
   Fixture fixture;
   FakeSession session(true);
-  fixture.start(session.get());
+  fixture.start(session.get(), {.shellSettleMs = 150});
 
-  fixture.shellNotifies("READY=1");
-  fixture.shellNotifies("READY=1");
+  fixture.shellDraws();
+  fixture.dispatchFor(100);
+  fixture.handover->layerSurfaceMapped();
+  fixture.dispatchFor(100);
+  CHECK_EQ(fixture.greetd.receive(), std::string());
+
+  fixture.dispatchFor(100);
+  CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
+}
+
+UMBRIEL_TEST(shellThatNeverDrawsGetsTheSwitchAfterTheFallback) {
+  Fixture fixture;
+  FakeSession session(true);
+  fixture.start(session.get(), {.shellFallbackMs = 20});
+
+  fixture.dispatchFor(60);
+
+  CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
+  CHECK_EQ(fixture.greetd.receive(), std::string("PRESENTED=1"));
+}
+
+UMBRIEL_TEST(switchIsRequestedOnce) {
+  Fixture fixture;
+  FakeSession session(true);
+  fixture.start(session.get(), {.shellSettleMs = 20, .shellFallbackMs = 80});
+
+  fixture.shellDraws();
   fixture.dispatchFor(50);
+  fixture.handover->layerSurfaceMapped();
+  fixture.dispatchFor(100);
 
   CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
   CHECK_EQ(fixture.greetd.receive(), std::string("PRESENTED=1"));
   CHECK_EQ(fixture.greetd.receive(), std::string());
 }
 
-UMBRIEL_TEST(readyShellOnInactiveSessionKeepsTheGreeterUntilTheSessionIsActive) {
+UMBRIEL_TEST(drawnShellOnInactiveSessionKeepsTheGreeterUntilTheSessionIsActive) {
   Fixture fixture;
   FakeSession session(false);
-  fixture.start(session.get());
+  fixture.start(session.get(), {.shellSettleMs = 20});
 
-  fixture.shellNotifies("READY=1");
-  fixture.dispatchFor(100);
+  fixture.shellDraws();
+  fixture.dispatchFor(60);
 
   CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
   CHECK_EQ(fixture.greetd.receive(), std::string());
@@ -270,9 +270,9 @@ UMBRIEL_TEST(readyShellOnInactiveSessionKeepsTheGreeterUntilTheSessionIsActive) 
 UMBRIEL_TEST(activatedSessionReleasesTheGreeterAfterTheFallbackWhenNoOutputPresents) {
   Fixture fixture;
   FakeSession session(false);
-  fixture.start(session.get(), {.presentedFallbackMs = 20, .logoutMs = 20000});
-  fixture.shellNotifies("READY=1");
-  fixture.dispatchFor(50);
+  fixture.start(session.get(), {.presentedFallbackMs = 20, .shellSettleMs = 20});
+  fixture.shellDraws();
+  fixture.dispatchFor(60);
   CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));
 
   session.activate();
@@ -282,7 +282,7 @@ UMBRIEL_TEST(activatedSessionReleasesTheGreeterAfterTheFallbackWhenNoOutputPrese
   CHECK_EQ(fixture.greetd.receive(), std::string());
 }
 
-UMBRIEL_TEST(logoutAsksGreetdToTakeOverAndReplyToTheReadinessSocket) {
+UMBRIEL_TEST(logoutAsksGreetdToTakeOverAndReplyToTheReplySocket) {
   Fixture fixture;
   FakeSession session(true);
   fixture.start(session.get());
@@ -290,7 +290,7 @@ UMBRIEL_TEST(logoutAsksGreetdToTakeOverAndReplyToTheReadinessSocket) {
   CHECK(fixture.handover->requestLogout());
   fixture.dispatchFor(50);
 
-  CHECK_EQ(fixture.greetd.receive(), std::format("LOGOUT=1\nREPLY={}", fixture.expectedNotifySocket()));
+  CHECK_EQ(fixture.greetd.receive(), std::format("LOGOUT=1\nREPLY={}", fixture.replySocket()));
   CHECK_EQ(fixture.exitRequests, 0);
 }
 
@@ -302,7 +302,7 @@ UMBRIEL_TEST(repeatedLogoutWhileGreetdTakesOverIsSwallowedWithoutAskingAgain) {
   CHECK(fixture.handover->requestLogout());
   CHECK(fixture.handover->requestLogout());
 
-  CHECK_EQ(fixture.greetd.receive(), std::format("LOGOUT=1\nREPLY={}", fixture.expectedNotifySocket()));
+  CHECK_EQ(fixture.greetd.receive(), std::format("LOGOUT=1\nREPLY={}", fixture.replySocket()));
   CHECK_EQ(fixture.greetd.receive(), std::string());
 }
 
@@ -331,7 +331,7 @@ UMBRIEL_TEST(greetdQuitWithoutAPendingLogoutIsIgnored) {
   CHECK(fixture.handover->requestLogout());
 }
 
-UMBRIEL_TEST(logoutIsNotDeferredWhenTheReadinessSocketCouldNotBeCreated) {
+UMBRIEL_TEST(logoutIsNotDeferredWhenTheReplySocketCouldNotBeCreated) {
   Fixture fixture;
   FakeSession session(true);
   const ScopedEnvironment missingRuntimeDir("XDG_RUNTIME_DIR", (fixture.dir / "missing").string());
@@ -339,15 +339,6 @@ UMBRIEL_TEST(logoutIsNotDeferredWhenTheReadinessSocketCouldNotBeCreated) {
 
   CHECK(!fixture.handover->requestLogout());
   CHECK_EQ(fixture.greetd.receive(), std::string());
-}
-
-UMBRIEL_TEST(shellGetsNoReadinessSocketWhenItCouldNotBeCreated) {
-  Fixture fixture;
-  FakeSession session(true);
-  const ScopedEnvironment missingRuntimeDir("XDG_RUNTIME_DIR", (fixture.dir / "missing").string());
-  fixture.start(session.get());
-
-  CHECK_EQ(fixture.notifySocket(), std::string());
 }
 
 UMBRIEL_TEST(logoutGivesGreetdTwentySecondsByDefault) { CHECK_EQ(SessionHandoverTimeouts{}.logoutMs, 20000); }
@@ -366,7 +357,7 @@ UMBRIEL_TEST(logoutWaitsForGreetdWithinTheTimeout) {
 UMBRIEL_TEST(logoutEndsTheSessionByItselfWhenGreetdNeverAnswers) {
   Fixture fixture;
   FakeSession session(true);
-  fixture.start(session.get(), {.presentedFallbackMs = 1000, .logoutMs = 20});
+  fixture.start(session.get(), {.logoutMs = 20});
 
   CHECK(fixture.handover->requestLogout());
   fixture.dispatchUntil([&] { return fixture.exitRequests != 0; });

@@ -37,21 +37,25 @@ namespace umbriel {
       : m_host(std::move(host)), m_socketPath(std::move(socketPath)), m_timeouts(timeouts) {
     wl_event_loop* loop = m_host.loop;
     const char* runtimeDir = std::getenv("XDG_RUNTIME_DIR");
-    m_notifyPath = std::format("{}/umbriel-ready-{}.sock", runtimeDir != nullptr ? runtimeDir : "/tmp", getpid());
-    ::unlink(m_notifyPath.c_str());
+    m_replyPath = std::format("{}/umbriel-ready-{}.sock", runtimeDir != nullptr ? runtimeDir : "/tmp", getpid());
+    ::unlink(m_replyPath.c_str());
     sockaddr_un addr{};
-    m_notifyFd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    if (m_notifyFd < 0
-        || !fillAddress(addr, m_notifyPath)
-        || ::bind(m_notifyFd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
-      kLog.error("failed to create the readiness socket {}: {}", m_notifyPath, std::strerror(errno));
-      if (m_notifyFd >= 0) {
-        ::close(m_notifyFd);
-        m_notifyFd = -1;
+    m_replyFd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (m_replyFd < 0
+        || !fillAddress(addr, m_replyPath)
+        || ::bind(m_replyFd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
+      kLog.error("failed to create the reply socket {}: {}", m_replyPath, std::strerror(errno));
+      if (m_replyFd >= 0) {
+        ::close(m_replyFd);
+        m_replyFd = -1;
       }
     } else {
-      m_notifySource = wl_event_loop_add_fd(loop, m_notifyFd, WL_EVENT_READABLE, onNotifyReadable, this);
+      m_replySource = wl_event_loop_add_fd(loop, m_replyFd, WL_EVENT_READABLE, onReplyReadable, this);
     }
+
+    m_shellSettleTimer = wl_event_loop_add_timer(loop, onShellSettled, this);
+    m_shellFallbackTimer = wl_event_loop_add_timer(loop, onShellFallback, this);
+    wl_event_source_timer_update(m_shellFallbackTimer, m_timeouts.shellFallbackMs);
 
     wlr_session* session = m_host.session;
     if (session != nullptr && !session->active) {
@@ -61,8 +65,7 @@ namespace umbriel {
       wl_signal_add(&session->events.active, &m_sessionActive);
     }
     kLog.info(
-        "waiting for the shell on {} (session {})", m_notifyPath,
-        session != nullptr && session->active ? "active" : "inactive"
+        "waiting for the shell to draw (session {})", session != nullptr && session->active ? "active" : "inactive"
     );
   }
 
@@ -71,24 +74,52 @@ namespace umbriel {
     if (m_sessionActive.link.next != nullptr) {
       wl_list_remove(&m_sessionActive.link);
     }
-    for (wl_event_source* source : {m_notifySource, m_frameTimer, m_presentedTimer, m_logoutTimer}) {
+    for (wl_event_source* source :
+         {m_replySource, m_shellSettleTimer, m_shellFallbackTimer, m_frameTimer, m_presentedTimer, m_logoutTimer}) {
       if (source != nullptr) {
         wl_event_source_remove(source);
       }
     }
-    if (m_notifyFd >= 0) {
-      ::close(m_notifyFd);
-      ::unlink(m_notifyPath.c_str());
+    if (m_replyFd >= 0) {
+      ::close(m_replyFd);
+      ::unlink(m_replyPath.c_str());
     }
   }
 
-  void SessionHandover::beginShellSpawn() {
-    if (m_notifyFd >= 0) {
-      ::setenv("NOTIFY_SOCKET", m_notifyPath.c_str(), 1);
+  void SessionHandover::layerSurfaceMapped() {
+    if (m_readySent || !m_host.shellDrawn()) {
+      return;
     }
+    wl_event_source_timer_update(m_shellSettleTimer, m_timeouts.shellSettleMs);
   }
 
-  void SessionHandover::endShellSpawn() { ::unsetenv("NOTIFY_SOCKET"); }
+  int SessionHandover::onShellSettled(void* data) {
+    auto* self = static_cast<SessionHandover*>(data);
+    kLog.info("shell has drawn; asking the display manager to switch");
+    self->sendReady();
+    return 0;
+  }
+
+  int SessionHandover::onShellFallback(void* data) {
+    auto* self = static_cast<SessionHandover*>(data);
+    kLog.warn("shell did not draw in time; asking the display manager to switch anyway");
+    self->sendReady();
+    return 0;
+  }
+
+  void SessionHandover::sendReady() {
+    if (std::exchange(m_readySent, true)) {
+      return;
+    }
+    wl_event_source_timer_update(m_shellSettleTimer, 0);
+    wl_event_source_timer_update(m_shellFallbackTimer, 0);
+    send("READY=1");
+    wlr_session* session = m_host.session;
+    if (session != nullptr && session->active && m_presentedTimer == nullptr) {
+      // Not a handover after all (the session was already active): there is no greeter frame to replace.
+      sendPresented();
+    }
+  }
 
   bool SessionHandover::requestLogout() {
     if (m_logoutReleased) {
@@ -97,12 +128,12 @@ namespace umbriel {
     if (m_logoutPending) {
       return true;
     }
-    if (m_notifyFd < 0) {
+    if (m_replyFd < 0) {
       return false;
     }
     m_logoutPending = true;
     kLog.info("asking the display manager for a seamless logout");
-    send(std::format("LOGOUT=1\nREPLY={}", m_notifyPath));
+    send(std::format("LOGOUT=1\nREPLY={}", m_replyPath));
     m_logoutTimer = wl_event_loop_add_timer(m_host.loop, onLogoutTimeout, this);
     wl_event_source_timer_update(m_logoutTimer, m_timeouts.logoutMs);
     return true;
@@ -116,7 +147,7 @@ namespace umbriel {
     return 0;
   }
 
-  int SessionHandover::onNotifyReadable(int fd, uint32_t /*mask*/, void* data) {
+  int SessionHandover::onReplyReadable(int fd, uint32_t /*mask*/, void* data) {
     auto* self = static_cast<SessionHandover*>(data);
     std::array<char, 256> buffer{};
     const ssize_t len = ::recv(fd, buffer.data(), buffer.size() - 1, 0);
@@ -128,17 +159,6 @@ namespace umbriel {
       kLog.info("greeter is on screen; quitting");
       self->m_logoutReleased = true;
       self->m_host.requestSessionExit();
-      return 0;
-    }
-    if (!self->m_readySent && message.contains("READY=1")) {
-      self->m_readySent = true;
-      kLog.info("shell is ready; asking the display manager to switch");
-      self->send("READY=1");
-      wlr_session* session = self->m_host.session;
-      if (session != nullptr && session->active && self->m_presentedTimer == nullptr) {
-        // Not a handover after all (the session was already active): there is no greeter frame to replace.
-        self->send("PRESENTED=1");
-      }
     }
     return 0;
   }

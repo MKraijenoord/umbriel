@@ -408,6 +408,8 @@ namespace umbriel {
     void scheduleIpcWorkspacesEvent();
     // Same pacing for the layer-shell surface list.
     void scheduleIpcLayersEvent();
+    void notifyLayerSurfaceMapped();
+    bool shellDrawnOnEveryOutput() const;
     // Same pacing for the output list.
     void scheduleIpcOutputsEvent();
 

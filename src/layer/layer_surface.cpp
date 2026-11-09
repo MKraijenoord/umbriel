@@ -463,6 +463,7 @@ namespace umbriel {
     syncPopupTree();
     m_server->scheduleIpcLayersEvent();
     m_server->updateIdleInhibit();
+    m_server->notifyLayerSurfaceMapped();
     if (Output* out = output()) {
       out->markDirty(Dirty::LayerArrange);
       if (m_layerSurface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND) {
