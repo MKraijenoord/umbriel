@@ -44,7 +44,7 @@ namespace umbriel {
     SessionHandover(const SessionHandover&) = delete;
     SessionHandover& operator=(const SessionHandover&) = delete;
 
-    void layerSurfaceMapped();
+    void layerSurfaceMapped(std::string_view surface);
 
     // Asks the display manager to bring up the greeter behind this session and switch to it once it is drawn; this
     // session quits when told to (QUIT=1) or after a timeout. Returns false when no display manager is listening.

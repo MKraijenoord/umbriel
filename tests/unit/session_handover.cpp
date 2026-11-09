@@ -160,7 +160,7 @@ namespace {
 
     void shellDraws() {
       shellDrawn = true;
-      handover->layerSurfaceMapped();
+      handover->layerSurfaceMapped("ns=test");
     }
 
     void dispatchFor(int milliseconds) const {
@@ -208,7 +208,7 @@ UMBRIEL_TEST(layerSurfacesMappedBeforeTheShellIsDrawnDoNotAskForTheSwitch) {
   FakeSession session(true);
   fixture.start(session.get(), {.shellSettleMs = 20});
 
-  fixture.handover->layerSurfaceMapped();
+  fixture.handover->layerSurfaceMapped("ns=test");
   fixture.dispatchFor(60);
 
   CHECK_EQ(fixture.greetd.receive(), std::string());
@@ -221,7 +221,7 @@ UMBRIEL_TEST(layerSurfaceMappedWhileTheShellSettlesWaitsForItToo) {
 
   fixture.shellDraws();
   fixture.dispatchFor(100);
-  fixture.handover->layerSurfaceMapped();
+  fixture.handover->layerSurfaceMapped("ns=test");
   fixture.dispatchFor(100);
   CHECK_EQ(fixture.greetd.receive(), std::string());
 
@@ -247,7 +247,7 @@ UMBRIEL_TEST(switchIsRequestedOnce) {
 
   fixture.shellDraws();
   fixture.dispatchFor(50);
-  fixture.handover->layerSurfaceMapped();
+  fixture.handover->layerSurfaceMapped("ns=test");
   fixture.dispatchFor(100);
 
   CHECK_EQ(fixture.greetd.receive(), std::string("READY=1"));

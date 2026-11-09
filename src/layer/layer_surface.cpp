@@ -17,6 +17,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cstdlib>
+#include <format>
 
 namespace umbriel {
 
@@ -463,7 +464,13 @@ namespace umbriel {
     syncPopupTree();
     m_server->scheduleIpcLayersEvent();
     m_server->updateIdleInhibit();
-    m_server->notifyLayerSurfaceMapped();
+    m_server->notifyLayerSurfaceMapped(
+        std::format(
+            "ns={} layer={} output={}", m_layerSurface->namespace_ != nullptr ? m_layerSurface->namespace_ : "",
+            static_cast<unsigned>(m_layerSurface->current.layer),
+            m_layerSurface->output != nullptr ? m_layerSurface->output->name : "(none)"
+        )
+    );
     if (Output* out = output()) {
       out->markDirty(Dirty::LayerArrange);
       if (m_layerSurface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND) {

@@ -1360,9 +1360,9 @@ namespace umbriel {
     return true;
   }
 
-  void Server::notifyLayerSurfaceMapped() {
+  void Server::notifyLayerSurfaceMapped(std::string_view surface) {
     if (m_sessionHandover != nullptr) {
-      m_sessionHandover->layerSurfaceMapped();
+      m_sessionHandover->layerSurfaceMapped(surface);
     }
   }
 

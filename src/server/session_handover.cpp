@@ -86,8 +86,13 @@ namespace umbriel {
     }
   }
 
-  void SessionHandover::layerSurfaceMapped() {
-    if (m_readySent || !m_host.shellDrawn()) {
+  void SessionHandover::layerSurfaceMapped(std::string_view surface) {
+    if (m_readySent) {
+      return;
+    }
+    const bool drawn = m_host.shellDrawn();
+    kLog.info("layer surface mapped: {}{}", surface, drawn ? "; restarting the shell settle timer" : "");
+    if (!drawn) {
       return;
     }
     wl_event_source_timer_update(m_shellSettleTimer, m_timeouts.shellSettleMs);
