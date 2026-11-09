@@ -1,4 +1,5 @@
-"""Hand the display over to a fake greetd only once the shell has drawn its background, not just its bar."""
+"""Hand the display over to a fake greetd only once the shell has drawn a full-output background, not just its bar or
+a small background-layer surface such as an output probe."""
 
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 STUB = "#!/bin/sh\nexit 0\n"
 
 SHELL = """#!/bin/sh
+"$HANDOVER_LAYER_CLIENT" HEADLESS-1 0 background-square &
 "$HANDOVER_LAYER_CLIENT" HEADLESS-1 30 &
 exec 3<>"$HANDOVER_ROOT/shell-gate"
 read -r _ <&3
@@ -92,4 +94,4 @@ def check(binary, layer_client):
 
 if __name__ == "__main__":
     check(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
-    print("greetd is asked to switch only after the shell's background layer maps, not its bar")
+    print("greetd is asked to switch only after a full-output background maps, not the bar or a background probe")

@@ -527,7 +527,8 @@ int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IOLBF, 0);
   if (argc < 3) {
     std::println(
-        "usage: layer-client <output> <exclusive-height-or-zero-background> [bottom-layer|overlay-layer] "
+        "usage: layer-client <output> <exclusive-height-or-zero-background> "
+        "[bottom-layer|overlay-layer|background-square] "
         "[log-configures] "
         "[keyboard=none|on-demand|exclusive] [release-on-escape] [popup-on-click|popup-on-release] "
         "[popup-color=<ARGB>]"
@@ -545,12 +546,16 @@ int main(int argc, char** argv) {
   // A 200x200 bottom-layer square in the top-left corner, which the overview mirrors into every workspace preview.
   bool bottom = false;
   bool overlay = false;
+  // A 200x200 background-layer square, like a shell's output probe: on the background layer, but not a wallpaper.
+  bool backgroundSquare = false;
   for (int index = 3; index < argc; ++index) {
     const std::string option = argv[index];
     if (option == "bottom-layer") {
       bottom = true;
     } else if (option == "overlay-layer") {
       overlay = true;
+    } else if (option == "background-square") {
+      backgroundSquare = true;
     } else if (option == "keyboard=none") {
       state.keyboardInteractivity = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
     } else if (option == "keyboard=on-demand") {
@@ -640,7 +645,7 @@ int main(int argc, char** argv) {
     zwlr_layer_surface_v1_set_keyboard_interactivity(state.layerSurface, state.keyboardInteractivity);
   }
   uint32_t anchors = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
-  if (bottom || overlay) {
+  if (bottom || overlay || backgroundSquare) {
     zwlr_layer_surface_v1_set_size(state.layerSurface, 200, 200);
     if (overlay) {
       zwlr_layer_surface_v1_set_exclusive_zone(state.layerSurface, -1);

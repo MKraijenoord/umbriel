@@ -1373,10 +1373,14 @@ namespace umbriel {
         continue;
       }
       anyOutput = true;
+      const wlr_box box = output->layoutBox();
       const bool hasBackground = std::ranges::any_of(m_layerSurfaces, [&](const auto& layer) {
+        const auto& state = layer->layerSurface()->current;
         return layer->mapped()
             && layer->output() == output.get()
-            && layer->layerSurface()->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+            && state.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND
+            && static_cast<int>(state.actual_width) >= box.width
+            && static_cast<int>(state.actual_height) >= box.height;
       });
       if (!hasBackground) {
         return false;
